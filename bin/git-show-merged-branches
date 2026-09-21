@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
 
-# 1. Try to auto-add the upstream fork if using GitHub CLI
-if command -v gh &> /dev/null; then
-    PARENT_URL=$(gh repo view --json parent -q '.parent.url' 2>/dev/null)
-    if [ ! -z "$PARENT_URL" ] && ! git remote | grep -q "upstream"; then
-        git remote add upstream "$PARENT_URL"
-        echo "Successfully added upstream: $PARENT_URL"
-    fi
+# 1. Dynamically find the upstream parent repo url from git config or git remote
+parent_remote=$(git remote -v | grep 'upstream' | head -n 1 | awk '{print $2}')
+
+# Fallback: If upstream isn't set, look for the original fork source via 'origin' config
+if [ -z "$parent_remote" ]; then
+    parent_remote=$(git config --get remote.origin.url | sed 's/\.git$//')
 fi
 
-# 2. Fetch the latest from all remotes
+# 2. Add the upstream if it doesn't already exist and a parent was found
+if ! git remote | grep -q "upstream" && [ ! -z "$parent_remote" ]; then
+    # Extracts the parent project path to format an upstream track event
+    git remote add upstream "$parent_remote"
+fi
+
+# 3. Remote event: Fetch updates across all remotes and prune deleted branches
 git fetch --all --prune
 
-# 3. Detect the main branch name from upstream (fallback to origin, then 'main')
-default_branch=$(git remote show upstream 2>/dev/null | sed -n 's/^[[:space:]]*HEAD branch:[[:space:]]*//p')
-default_branch=${default_branch:-$(git remote show origin 2>/dev/null | sed -n 's/^[[:space:]]*HEAD branch:[[:space:]]*//p')}
-default_branch=${default_branch:-main}
+# 4. Identify the active dynamic default branch 
+default_branch=$(git_extra_default_branch 2>/dev/null || git remote show origin | sed -n 's/^[[:space:]]*HEAD branch:[[:space:]]*//p' || echo "main")
 
-# 4. Clean up merged local branches safely
+# 5. Clean and execute the local changes via sed and grep
 git branch --no-color --merged | \
     grep -vE "^(\*|\+)" | \
     sed 's/^[[:space:]]*//' | \
-    grep -E -v "^(${default_branch}|main|master|trunk|svn)$" | \
+    grep -Fvx -e "$default_branch" -e "main" -e "master" -e "trunk" -e "svn" | \
     xargs -r git branch -d
