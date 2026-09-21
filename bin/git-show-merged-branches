@@ -1,4 +1,25 @@
 #!/usr/bin/env bash
 
-default_branch=$(git_extra_default_branch)
-git branch --no-color --merged | grep -vE "^(\*|\+)" | sed 's/^[ ]*//' | grep -Fvx -e "$default_branch" -e "main" -e "master" -e "trunk" -e "svn" || true
+# 1. Try to auto-add the upstream fork if using GitHub CLI
+if command -v gh &> /dev/null; then
+    PARENT_URL=$(gh repo view --json parent -q '.parent.url' 2>/dev/null)
+    if [ ! -z "$PARENT_URL" ] && ! git remote | grep -q "upstream"; then
+        git remote add upstream "$PARENT_URL"
+        echo "Successfully added upstream: $PARENT_URL"
+    fi
+fi
+
+# 2. Fetch the latest from all remotes
+git fetch --all --prune
+
+# 3. Detect the main branch name from upstream (fallback to origin, then 'main')
+default_branch=$(git remote show upstream 2>/dev/null | sed -n 's/^[[:space:]]*HEAD branch:[[:space:]]*//p')
+default_branch=${default_branch:-$(git remote show origin 2>/dev/null | sed -n 's/^[[:space:]]*HEAD branch:[[:space:]]*//p')}
+default_branch=${default_branch:-main}
+
+# 4. Clean up merged local branches safely
+git branch --no-color --merged | \
+    grep -vE "^(\*|\+)" | \
+    sed 's/^[[:space:]]*//' | \
+    grep -E -v "^(${default_branch}|main|master|trunk|svn)$" | \
+    xargs -r git branch -d
